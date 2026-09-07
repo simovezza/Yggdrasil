@@ -1,0 +1,528 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load icons %}
+
+{% block title %}Urology Workspace (Preview) — Yggdrasil{% endblock %}
+
+{% block extra_css %}
+<style>
+.urology-preview {
+    max-width: 1040px;
+    margin: 2rem auto 4rem;
+    padding: 0 1rem;
+}
+.urology-hero {
+    border-radius: 20px;
+    background: var(--ygg-surface);
+    border: 1px solid var(--ygg-border);
+    padding: 2.5rem;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--ygg-shadow-card-light);
+    margin-bottom: 2rem;
+}
+.urology-hero__bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: var(--ygg-urology-grad);
+}
+.urology-hero__watermark {
+    position: absolute;
+    right: -20px;
+    bottom: -30px;
+    font-size: 220px;
+    color: var(--ygg-urology);
+    opacity: 0.05;
+    pointer-events: none;
+}
+.urology-hero__content {
+    position: relative;
+    z-index: 2;
+}
+.urology-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--ygg-urology-soft);
+    color: var(--ygg-urology);
+    border: 1px solid currentColor;
+    margin-bottom: 1.25rem;
+}
+.urology-badge__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.urology-title {
+    font-size: 2.25rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--ygg-text);
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.urology-title__icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--ygg-urology-soft);
+    color: var(--ygg-urology);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+}
+.urology-desc {
+    font-size: 1.05rem;
+    color: var(--ygg-text-muted);
+    line-height: 1.6;
+    max-width: 740px;
+    margin-bottom: 1.5rem;
+}
+.urology-modalities-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+.urology-mod-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: var(--ygg-surface-alt);
+    border: 1px solid var(--ygg-border-strong);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ygg-text);
+}
+.urology-mod-pill__tag {
+    font-family: var(--ygg-font-mono);
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--ygg-urology-soft);
+    color: var(--ygg-urology);
+}
+.urology-nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ygg-link);
+    text-decoration: none;
+    transition: transform 0.15s ease;
+}
+.urology-nav-back:hover {
+    color: var(--ygg-text);
+    transform: translateX(-3px);
+}
+
+/* Dual Modality Showcase Cards */
+.urology-showcase-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+@media (max-width: 820px) {
+    .urology-showcase-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.urology-mod-card {
+    background: var(--ygg-surface);
+    border: 1px solid var(--ygg-border);
+    border-radius: 16px;
+    padding: 1.75rem;
+    box-shadow: var(--ygg-shadow-card-light);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.urology-mod-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--ygg-urology);
+    box-shadow: var(--ygg-shadow-pop);
+}
+.urology-mod-card__accent {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--ygg-urology-grad);
+}
+.urology-mod-card__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 1rem;
+}
+.urology-mod-card__lead {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.urology-mod-card__icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--ygg-urology-soft);
+    color: var(--ygg-urology);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+}
+.urology-mod-card__title-wrap h3 {
+    margin: 0 0 2px;
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--ygg-text);
+}
+.urology-mod-card__subtitle {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ygg-urology);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.urology-mod-card__badge {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--ygg-font-mono);
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--ygg-surface-alt);
+    border: 1px solid var(--ygg-border);
+    color: var(--ygg-text-muted);
+}
+.urology-mod-card__desc {
+    font-size: 0.925rem;
+    color: var(--ygg-text-muted);
+    line-height: 1.6;
+    margin: 0 0 1.25rem;
+}
+.urology-mod-card__features {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.urology-mod-card__feature {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font-size: 0.875rem;
+    color: var(--ygg-text);
+    line-height: 1.45;
+}
+.urology-mod-card__feature i {
+    color: var(--ygg-urology);
+    font-size: 12px;
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+.urology-mod-card__formats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--ygg-text-faint);
+    margin-bottom: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed var(--ygg-border);
+}
+.urology-mod-card__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: auto;
+}
+.urology-chip {
+    font-size: 11px;
+    font-family: var(--ygg-font-mono);
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--ygg-surface-alt);
+    border: 1px solid var(--ygg-border);
+    color: var(--ygg-text-muted);
+}
+
+/* Synergy section */
+.urology-synergy-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+}
+@media (max-width: 768px) {
+    .urology-synergy-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.urology-synergy-card {
+    background: var(--ygg-surface-alt);
+    border: 1px solid var(--ygg-border);
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+}
+.urology-synergy-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--ygg-surface);
+    border: 1px solid var(--ygg-border);
+    color: var(--ygg-urology);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+}
+.urology-synergy-card h4 {
+    margin: 0 0 4px;
+    font-size: 0.975rem;
+    font-weight: 700;
+    color: var(--ygg-text);
+}
+.urology-synergy-card p {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--ygg-text-muted);
+    line-height: 1.5;
+}
+
+/* Status Banner */
+.urology-status-banner {
+    border-radius: 16px;
+    background: var(--ygg-surface);
+    border: 1px solid var(--ygg-border);
+    padding: 1.5rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    box-shadow: var(--ygg-shadow-card-light);
+}
+.urology-status-info {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.urology-status-icon {
+    font-size: 24px;
+    color: var(--ygg-urology);
+}
+.urology-status-text h4 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ygg-text);
+}
+.urology-status-text p {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--ygg-text-muted);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="urology-preview">
+    <div class="mb-4">
+        <a href="{% url 'home' %}" class="urology-nav-back">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i> Back to Platform Overview
+        </a>
+    </div>
+
+    <!-- Main Hero -->
+    <div class="urology-hero">
+        <span class="urology-hero__bar" aria-hidden="true"></span>
+        <i class="fas fa-microscope urology-hero__watermark" aria-hidden="true"></i>
+        <div class="urology-hero__content">
+            <div class="urology-badge">
+                <span class="urology-badge__dot" aria-hidden="true"></span>
+                Dual Modalities · Planned Release
+            </div>
+            <h1 class="urology-title">
+                <span class="urology-title__icon">{% icon 'microscope' %}</span>
+                Urology Clinical Workspace
+            </h1>
+            <p class="urology-desc">
+                Dedicated research workspace for urological oncology and surgical planning. Built around two core imaging modalities: Whole Slide Imaging (WSI) for digital histopathology and Multiparametric Magnetic Resonance Imaging (MRI) for volumetric tissue analysis.
+            </p>
+            <div class="urology-modalities-pills">
+                <div class="urology-mod-pill">
+                    <i class="fas fa-microscope text-purple-500" aria-hidden="true"></i>
+                    <span>Modality 1:</span>
+                    <span class="urology-mod-pill__tag">WSI</span>
+                    <span class="text-xs text-content-muted font-normal">Whole Slide Imaging</span>
+                </div>
+                <div class="urology-mod-pill">
+                    <i class="fas fa-wave-square text-purple-500" aria-hidden="true"></i>
+                    <span>Modality 2:</span>
+                    <span class="urology-mod-pill__tag">MRI</span>
+                    <span class="text-xs text-content-muted font-normal">Magnetic Resonance</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- The Two Core Modalities Showcase -->
+    <h2 class="text-lg font-bold mb-4 flex items-center gap-2">
+        {% icon 'layer-group' %}
+        <span>Core Clinical Modalities</span>
+    </h2>
+
+    <div class="urology-showcase-grid">
+        <!-- Modality 1: WSI -->
+        <div class="urology-mod-card">
+            <span class="urology-mod-card__accent" aria-hidden="true"></span>
+            <div class="urology-mod-card__head">
+                <div class="urology-mod-card__lead">
+                    <span class="urology-mod-card__icon">{% icon 'microscope' %}</span>
+                    <div class="urology-mod-card__title-wrap">
+                        <h3>WSI</h3>
+                        <span class="urology-mod-card__subtitle">Whole Slide Imaging</span>
+                    </div>
+                </div>
+                <span class="urology-mod-card__badge">Digital Pathology</span>
+            </div>
+            <p class="urology-mod-card__desc">
+                Gigapixel digital pathology for prostate, kidney, and bladder histopathology. Deep-zoom tissue exploration with multi-level slide pyramids, AI boundary segmentation, and durable Gleason grading.
+            </p>
+            <ul class="urology-mod-card__features">
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>Multi-resolution pyramid viewer for ultra-high-resolution biopsy and resection slides</span>
+                </li>
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>Automated Gleason pattern classification and glandular architecture detection</span>
+                </li>
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>Durable multi-reader annotations for tumor margins, stroma, and lymphovascular invasion</span>
+                </li>
+            </ul>
+            <div class="urology-mod-card__formats">
+                <i class="fas fa-file-image" aria-hidden="true"></i>
+                <span>Formats: <code>.svs</code>, <code>.ndpi</code>, <code>.mrxs</code>, <code>.tiff</code>, DeepZoom</span>
+            </div>
+            <div class="urology-mod-card__chips">
+                <span class="urology-chip">Gigapixel Pyramid</span>
+                <span class="urology-chip">Gleason Grading</span>
+                <span class="urology-chip">Tissue Margins</span>
+                <span class="urology-chip">Biopsy Cores</span>
+            </div>
+        </div>
+
+        <!-- Modality 2: MRI -->
+        <div class="urology-mod-card">
+            <span class="urology-mod-card__accent" aria-hidden="true"></span>
+            <div class="urology-mod-card__head">
+                <div class="urology-mod-card__lead">
+                    <span class="urology-mod-card__icon">{% icon 'file-waveform' %}</span>
+                    <div class="urology-mod-card__title-wrap">
+                        <h3>MRI</h3>
+                        <span class="urology-mod-card__subtitle">Magnetic Resonance Imaging</span>
+                    </div>
+                </div>
+                <span class="urology-mod-card__badge">Volumetric Radiology</span>
+            </div>
+            <p class="urology-mod-card__desc">
+                Multiparametric MRI (mpMRI) review for prostate lesion detection and renal tumor volumetry. Spatial co-registration across anatomical and functional sequences with Cornerstone3D orthogonal MPR.
+            </p>
+            <ul class="urology-mod-card__features">
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>Synchronized viewports across T2W, Diffusion-Weighted Imaging (DWI), and ADC maps</span>
+                </li>
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>PI-RADS v2.1 structured reporting with automated peripheral and transition zone segmentation</span>
+                </li>
+                <li class="urology-mod-card__feature">
+                    <i class="fas fa-check-circle" aria-hidden="true"></i>
+                    <span>Volumetric renal tumor delineation and 3D surface mesh export for nephron-sparing surgery</span>
+                </li>
+            </ul>
+            <div class="urology-mod-card__formats">
+                <i class="fas fa-cube" aria-hidden="true"></i>
+                <span>Formats: <code>.nii.gz</code> (NIfTI), multi-sequence volumes</span>
+            </div>
+            <div class="urology-mod-card__chips">
+                <span class="urology-chip">T2W / DWI / ADC</span>
+                <span class="urology-chip">PI-RADS v2.1</span>
+                <span class="urology-chip">Cornerstone3D MPR</span>
+                <span class="urology-chip">3D Volumetry</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cross-Modal Integration & Synergy -->
+    <h2 class="text-lg font-bold mb-4 flex items-center gap-2">
+        {% icon 'link' %}
+        <span>Cross-Modal Workflows & Intelligence</span>
+    </h2>
+
+    <div class="urology-synergy-grid">
+        <div class="urology-synergy-card">
+            <span class="urology-synergy-icon">{% icon 'crosshairs' %}</span>
+            <div>
+                <h4>Radio-Pathology Co-Registration</h4>
+                <p>Bi-directional correlation between in-vivo mpMRI lesion targets and ex-vivo WSI whole-mount histopathology for ground-truth validation.</p>
+            </div>
+        </div>
+
+        <div class="urology-synergy-card">
+            <span class="urology-synergy-icon">{% icon 'microphone' %}</span>
+            <div>
+                <h4>Whisper Live Voice Dictation</h4>
+                <p>Modalities-aware medical voice reporting tailored with specialized urological and histopathological clinical lexicons.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Banner -->
+    <div class="urology-status-banner">
+        <div class="urology-status-info">
+            <i class="fas fa-circle-info urology-status-icon" aria-hidden="true"></i>
+            <div class="urology-status-text">
+                <h4>WSI & MRI Pipelines Under Validation</h4>
+                <p>OpenSlide gigapixel pyramids and Cornerstone3D multi-sequence viewers are currently being tailored with clinical research partners.</p>
+            </div>
+        </div>
+        <a href="{% url 'home' %}" class="landing-btn landing-btn--primary">
+            Return to Home
+        </a>
+    </div>
+</div>
+{% endblock %}

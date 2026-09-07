@@ -58,6 +58,7 @@ _DOMAIN_BLURBS = {
     "maxillo": "Dental & maxillofacial imaging — bite classification, IOS, CBCT and panoramic extraction.",
     "brain": "Brain tumor MRI — multi-sequence review with AI-assisted captioning.",
     "laparoscopy": "Surgical video annotation — frame-accurate segmentation and tagging.",
+    "urology": "Urological oncology — whole slide imaging (WSI) digital pathology and multiparametric magnetic resonance (MRI).",
 }
 
 # Default glyph per domain when Project.icon is blank.
@@ -65,6 +66,23 @@ _DOMAIN_ICONS = {
     "maxillo": "fas fa-tooth",
     "brain": "fas fa-brain",
     "laparoscopy": "fas fa-video",
+    "urology": "fas fa-microscope",
+}
+
+# Modality feature tags per domain for the landing cards
+_DOMAIN_TAGS = {
+    "maxillo": ["CBCT", "IOS", "Panoramic"],
+    "brain": ["MRI T1/T2", "FLAIR", "AI Voice"],
+    "laparoscopy": ["Video", "Keyframes", "Segmentation"],
+    "urology": ["WSI", "MRI"],
+}
+
+# Domain specialty overline
+_DOMAIN_OVERLINES = {
+    "maxillo": "Maxillofacial",
+    "brain": "Neuroimaging",
+    "laparoscopy": "Surgical Vision",
+    "urology": "Urological Oncology",
 }
 
 
@@ -142,7 +160,7 @@ def project_admin_add_targets():
 
 
 def landing_domain_cards():
-    """The landing page's three domain cards (one per domain, not per project).
+    """The landing page's domain cards (one per domain, plus urology preview).
 
     Projects are chosen inside the domain (patient-list sidebar), so the first
     screen stays a compact domain chooser. Stat = aggregate patient count for
@@ -168,9 +186,32 @@ def landing_domain_cards():
             {
                 "slug": slug,
                 "name": label,
+                "overline": _DOMAIN_OVERLINES.get(slug, "Clinical Domain"),
+                "badge": "Active",
+                "badge_type": "active",
                 "icon": resolve_icon(_DOMAIN_ICONS.get(slug, "fas fa-folder-open")),
                 "blurb": _DOMAIN_BLURBS.get(slug, ""),
+                "tags": _DOMAIN_TAGS.get(slug, []),
                 "stat": stat,
+                "url": f"/{slug}/",
+                "cta": "Enter",
             }
         )
+
+    # Urology option (clinical workspace preview)
+    cards.append(
+        {
+            "slug": "urology",
+            "name": "Urology",
+            "overline": _DOMAIN_OVERLINES.get("urology", "Urological Oncology"),
+            "badge": "Preview",
+            "badge_type": "preview",
+            "icon": resolve_icon(_DOMAIN_ICONS.get("urology", "fas fa-microscope")),
+            "blurb": _DOMAIN_BLURBS.get("urology", ""),
+            "tags": _DOMAIN_TAGS.get("urology", []),
+            "stat": "In development",
+            "url": "/urology/",
+            "cta": "Explore Preview",
+        }
+    )
     return cards

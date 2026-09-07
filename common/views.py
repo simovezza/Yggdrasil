@@ -629,3 +629,16 @@ def changelog_page(request):
             "hide_maintenance_banner": False,
         },
     )
+
+
+def urology_preview(request):
+    """Clinical workspace preview for the upcoming Urology domain."""
+    return render(
+        request,
+        "common/urology_preview.html",
+        {
+            "domain_name": "Urology",
+            "domain_slug": "urology",
+        },
+    )
+
