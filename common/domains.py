@@ -13,6 +13,7 @@ DOMAIN_CHOICES = [
     ("maxillo", "Maxillo"),
     ("brain", "Brain"),
     ("laparoscopy", "Laparoscopy"),
+    ("urology", "Urology"),
 ]
 
 DEFAULT_DOMAIN = DOMAIN_CHOICES[0][0]
@@ -26,6 +27,7 @@ DOMAIN_FK_FIELDS = {
     "maxillo": ("patient", "voice_caption"),
     "brain": ("brain_patient", "brain_voice_caption"),
     "laparoscopy": ("laparoscopy_patient", "laparoscopy_voice_caption"),
+    "urology": ("urology_patient", "urology_voice_caption"),
 }
 
 
@@ -198,20 +200,4 @@ def landing_domain_cards():
             }
         )
 
-    # Urology option (clinical workspace preview)
-    cards.append(
-        {
-            "slug": "urology",
-            "name": "Urology",
-            "overline": _DOMAIN_OVERLINES.get("urology", "Urological Oncology"),
-            "badge": "Preview",
-            "badge_type": "preview",
-            "icon": resolve_icon(_DOMAIN_ICONS.get("urology", "fas fa-microscope")),
-            "blurb": _DOMAIN_BLURBS.get("urology", ""),
-            "tags": _DOMAIN_TAGS.get("urology", []),
-            "stat": "In development",
-            "url": "/urology/",
-            "cta": "Explore Preview",
-        }
-    )
     return cards

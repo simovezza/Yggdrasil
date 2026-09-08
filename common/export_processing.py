@@ -73,7 +73,7 @@ class ExportProcessor:
         # Which of FileRegistry's parallel patient FK columns this domain uses.
         # The modality -> file_type mapping that used to live here (and in two
         # other copies) is now common.export_catalog.
-        self.patient_fk = "brain_patient" if domain == "brain" else "patient"
+        self.patient_fk = "brain_patient" if domain == "brain" else ("urology_patient" if domain == "urology" else "patient")
         self.query_params = export.query_params
         self.folder_ids = self.query_params.get("folder_ids", [])
         self.project_id = self.query_params.get("project_id")
@@ -172,6 +172,8 @@ class ExportProcessor:
         """Return (Patient, VoiceCaption) model classes for the active domain."""
         if self.domain == "brain":
             from brain.models import Patient, VoiceCaption
+        elif self.domain == "urology":
+            from urology.models import Patient, VoiceCaption
         else:
             from maxillo.models import Patient, VoiceCaption
         return Patient, VoiceCaption
@@ -710,6 +712,9 @@ def start_export_processing(export_id, domain="maxillo"):
             export = LaparoscopyExport.objects.filter(id=export_id).first()
         elif domain == "brain":
             export = BrainExport.objects.filter(id=export_id).first()
+        elif domain == "urology":
+            from urology.models import Export as UrologyExport
+            export = UrologyExport.objects.filter(id=export_id).first()
         else:
             export = MaxilloExport.objects.filter(id=export_id).first()
         if not export:

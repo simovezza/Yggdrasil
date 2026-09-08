@@ -290,10 +290,24 @@ _LAPAROSCOPY_ARTIFACTS = [
     ),
 ]
 
+_UROLOGY_ARTIFACTS = [
+    Artifact("urology-mri.raw", "urology-mri", "Uploaded MRI", BUCKET_RAW, file_types=["urology_mri_raw"]),
+    Artifact(
+        "urology-mri.processed", "urology-mri", "Processed MRI", BUCKET_PROCESSED,
+        file_types=["urology_mri_processed"],
+    ),
+    Artifact("urology-wsi.raw", "urology-wsi", "Uploaded WSI", BUCKET_RAW, file_types=["urology_wsi_raw"]),
+    Artifact(
+        "urology-wsi.processed", "urology-wsi", "Processed WSI", BUCKET_PROCESSED,
+        file_types=["urology_wsi_processed"],
+    ),
+]
+
 ARTIFACTS_BY_DOMAIN = {
     "maxillo": _MAXILLO_ARTIFACTS + _SHARED_ARTIFACTS,
     "brain": _mri_artifacts() + _SHARED_ARTIFACTS,
     "laparoscopy": _LAPAROSCOPY_ARTIFACTS + _SHARED_ARTIFACTS,
+    "urology": _UROLOGY_ARTIFACTS + _SHARED_ARTIFACTS,
 }
 
 
