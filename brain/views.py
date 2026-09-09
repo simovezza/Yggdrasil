@@ -465,11 +465,16 @@ def upload_patient(request):
             "braintumor-mri-t1c",
             "braintumor-mri-seg",
         }
+        is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest"
         has_upload = any(request.FILES.getlist(field_name) for field_name in brain_upload_fields)
         form_is_valid = patient_upload_form.is_valid()
         if form_is_valid and not has_upload:
             patient_upload_form.add_error(None, "Add at least one file before uploading.")
             form_is_valid = False
+
+        if not form_is_valid and is_xhr:
+            error_msg = "Add at least one file before uploading." if not has_upload else "Please fix the errors in the form."
+            return JsonResponse({"ok": False, "error": error_msg}, status=400)
 
         if form_is_valid:
             patient = patient_upload_form.save(commit=False)
@@ -548,6 +553,14 @@ def upload_patient(request):
                 messages.success(request, summary_message)
             else:
                 messages.success(request, "Patient uploaded successfully!")
+
+            if is_xhr:
+                from django.urls import reverse, NoReverseMatch
+                try:
+                    redirect_url = reverse(f"{namespace}:patient_list")
+                except NoReverseMatch:
+                    redirect_url = reverse("patient_list")
+                return JsonResponse({"ok": True, "redirect": redirect_url})
 
             return redirect_with_namespace(request, "patient_list")
     else:

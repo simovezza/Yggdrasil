@@ -1,7 +1,8 @@
 from django.shortcuts import redirect
 from django.urls import path
 
-from urology import views
+from annotations import views as annotations_views
+from urology import views, wsi_views
 
 app_name = "urology"
 
@@ -101,4 +102,49 @@ urlpatterns = [
     ),
     path("export/<int:export_id>/delete/", views.export_delete, name="export_delete"),
     path("export/<int:export_id>/stop/", views.export_stop, name="export_stop"),
+    path(
+        "api/processing/files/serve/<int:file_id>/",
+        wsi_views.serve_file,
+        name="api_serve_file",
+    ),
+    path(
+        "api/processing/files/serve/<int:file_id>/<str:filename>",
+        wsi_views.serve_file,
+        name="api_serve_file_named",
+    ),
+    path(
+        "api/wsi/<int:file_id>/metadata/",
+        wsi_views.wsi_metadata_api,
+        name="wsi_metadata",
+    ),
+    path(
+        "api/wsi/<int:file_id>/tile/<int:level>/<int:col>_<int:row>.png",
+        wsi_views.wsi_tile_api,
+        name="wsi_tile",
+    ),
+    path(
+        "api/wsi/<int:file_id>/tile/<int:level>/<int:col>_<int:row>.jpg",
+        wsi_views.wsi_tile_api,
+        name="wsi_tile_jpg",
+    ),
+    path(
+        "api/wsi/<int:file_id>/tile/<int:level>/<int:col>_<int:row>.jpeg",
+        wsi_views.wsi_tile_api,
+        name="wsi_tile_jpeg",
+    ),
+    path(
+        "api/wsi/<int:file_id>/thumbnail/",
+        wsi_views.wsi_thumbnail_api,
+        name="wsi_thumbnail",
+    ),
+    path(
+        "api/patients/<int:patient_id>/measurements/",
+        annotations_views.save_measurements_api,
+        name="api_save_measurements",
+    ),
+    path(
+        "api/patients/<int:patient_id>/measurements/state/",
+        annotations_views.measurements_state_api,
+        name="api_measurements_state",
+    ),
 ]

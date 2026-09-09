@@ -15,7 +15,12 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
+from django.middleware.csrf import get_token
+
+from annotations.models import AnnotationSet
+from annotations.constants import PayloadFormat
 from common import export_catalog, export_ui
+from common.activity import record_recent
 from common.deletion import FolderNotEmpty, delete_folder as _delete_folder
 from common.export_processing import (
     ExportProcessor,
@@ -34,6 +39,7 @@ from common.modality_config import (
 )
 from common.models import FileRegistry, Modality, Project, ProjectAccess
 from common.object_storage import get_object_storage
+from common.annotation_lock import annotation_lock_reasons, lock_message
 from common.permissions import (
     filter_folders_for_user,
     filter_patients_for_user,
@@ -45,7 +51,8 @@ from common.permissions import (
 from common.project_filters import presence_filter_specs
 
 from .export_config import install_urology_export_mappings
-from .forms import PatientForm, PatientManagementForm
+from .file_utils import save_urology_modality_file
+from .forms import PatientForm, PatientManagementForm, PatientUploadForm
 from .helpers import redirect_with_namespace, render_with_fallback
 from .models import Export, Folder, Patient, Tag
 
@@ -282,33 +289,386 @@ def patient_list(request):
 
 @login_required
 def upload_patient(request):
-    """Clean placeholder for the upcoming Urology upload form."""
+    user_profile = getattr(request.user, "profile", None)
+    namespace = "urology"
+
+    if user_profile and not user_profile.can_upload_scans():
+        messages.error(request, "You do not have permission to upload scans.")
+        return redirect_with_namespace(request, "patient_list")
+
+    current_project_id = request.session.get("current_project_id")
+    project = None
+    if current_project_id:
+        try:
+            project = Project.objects.prefetch_related("modalities").get(
+                id=current_project_id
+            )
+        except Project.DoesNotExist:
+            project = None
+
+    if project is None:
+        project = Project.objects.filter(domain=namespace, is_active=True).first()
+
+    folders = filter_folders_for_user(
+        request.user,
+        Folder.objects.filter(parent__isnull=True)
+        .filter(project=project if project else None)
+        .order_by("name"),
+        namespace,
+    )
+    allowed_modalities = []
+    if project:
+        allowed_modalities = list(
+            project.modalities.filter(is_active=True).exclude(slug="rawzip")
+        )
+
+    if request.method == "POST":
+        patient_upload_form = PatientUploadForm(
+            request.POST, request.FILES, user=request.user, current_project=project
+        )
+        patient_form = PatientForm()
+
+        urology_upload_fields = {
+            "urology-mri",
+            "urology-wsi",
+        }
+        is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        has_upload = any(
+            request.FILES.getlist(field_name) for field_name in urology_upload_fields
+        )
+        form_is_valid = patient_upload_form.is_valid()
+        if form_is_valid and not has_upload:
+            patient_upload_form.add_error(None, "Add at least one file before uploading.")
+            form_is_valid = False
+
+        if not form_is_valid and is_xhr:
+            error_msg = "Add at least one file before uploading." if not has_upload else "Please fix the errors in the form."
+            return JsonResponse({"ok": False, "error": error_msg}, status=400)
+
+        if form_is_valid:
+            patient = patient_upload_form.save(commit=False)
+            patient.uploaded_by = request.user
+
+            folder = patient_upload_form.cleaned_data.get("folder")
+            if folder:
+                allowed_folder_ids = set(
+                    filter_folders_for_user(
+                        request.user,
+                        Folder.objects.filter(parent__isnull=True).only("id"),
+                        namespace,
+                    ).values_list("id", flat=True)
+                )
+                if folder.id not in allowed_folder_ids:
+                    if is_xhr:
+                        return JsonResponse(
+                            {"ok": False, "error": "You do not have permission to upload to the selected folder."},
+                            status=403,
+                        )
+                    messages.error(
+                        request,
+                        "You do not have permission to upload to the selected folder.",
+                    )
+                    allowed_folders = filter_folders_for_user(
+                        request.user,
+                        Folder.objects.filter(parent__isnull=True).order_by("name"),
+                        namespace,
+                    )
+                    return render(
+                        request,
+                        "common/upload/upload.html",
+                        {
+                            "patient_form": patient_form,
+                            "patient_upload_form": patient_upload_form,
+                            "folders": allowed_folders,
+                            "allowed_modalities": allowed_modalities,
+                        },
+                    )
+
+            if project:
+                patient.project = project
+            if folder:
+                patient.folder = folder
+            patient.save()
+            patient_upload_form.instance = patient
+            patient_upload_form.save(commit=True)
+
+            uploaded_modalities = []
+            processing_job_ids = []
+            urology_modalities = {
+                "urology-mri": "Urology MRI",
+                "urology-wsi": "Digital Pathology WSI",
+            }
+
+            for slug, display_name in urology_modalities.items():
+                file_obj = request.FILES.get(slug)
+                if not file_obj:
+                    continue
+                try:
+                    modality = Modality.objects.get(slug=slug)
+                    patient.modalities.add(modality)
+
+                    file_registry, job = save_urology_modality_file(
+                        patient, slug, file_obj
+                    )
+                    if file_registry:
+                        uploaded_modalities.append(display_name)
+                        if job:
+                            processing_job_ids.append(job.id)
+                except Exception as exc:
+                    logger.exception("Error saving %s", display_name)
+                    messages.error(request, f"Error saving {display_name}: {exc}")
+
+            if uploaded_modalities:
+                unique_modalities = list(dict.fromkeys(uploaded_modalities))
+                summary_message = (
+                    f"Patient uploaded successfully with {len(unique_modalities)} modality(s): "
+                    f"{', '.join(unique_modalities)}."
+                )
+                if processing_job_ids:
+                    summary_message += (
+                        f" Processing jobs: #{', #'.join(str(job_id) for job_id in processing_job_ids)}."
+                    )
+                messages.success(request, summary_message)
+            else:
+                messages.success(request, "Patient uploaded successfully!")
+
+            if is_xhr:
+                from django.urls import reverse, NoReverseMatch
+                try:
+                    redirect_url = reverse(f"{namespace}:patient_list")
+                except NoReverseMatch:
+                    redirect_url = reverse("patient_list")
+                return JsonResponse({"ok": True, "redirect": redirect_url})
+
+            return redirect_with_namespace(request, "patient_list")
+    else:
+        patient_form = PatientForm()
+        patient_upload_form = PatientUploadForm(
+            user=request.user, current_project=project
+        )
+
     return render(
         request,
-        "urology/placeholder.html",
+        "common/upload/upload.html",
         {
-            "title": "Upload Scan",
-            "subtitle": "Urology Scans Upload Pipeline",
-            "page_icon": "upload",
-            "message": "The Urology scan upload pipeline (mpMRI & WSI digital pathology) is currently under active development.",
+            "patient_form": patient_form,
+            "patient_upload_form": patient_upload_form,
+            "folders": folders,
+            "allowed_modalities": allowed_modalities,
         },
     )
 
 
 @login_required
 def patient_detail(request, patient_id):
-    """Clean placeholder for the upcoming Urology patient multimodal viewer."""
     patient = get_object_or_404(Patient, patient_id=patient_id)
-    return render(
-        request,
-        "urology/placeholder.html",
-        {
-            "title": f"Patient {patient.patient_id} - {patient.name}",
-            "subtitle": "Urology Multimodal Viewer",
-            "page_icon": "microscope",
-            "message": "The Urology multimodal viewer (mpMRI NIfTI & WSI digital pathology slides) is currently under active development.",
-        },
+    can_view = bool(
+        patient.project and user_has_project_access(request.user, patient.project)
     )
+    if user_is_project_admin(request.user, patient.project):
+        can_view = True
+    if not can_view:
+        messages.error(request, "You do not have permission to view this scan.")
+        return redirect("urology:patient_list")
+
+    management_form = PatientManagementForm(instance=patient, user=request.user)
+
+    can_modify = bool(
+        patient.project
+        and user_can_write_patient_annotations(request.user, patient)
+    )
+    if user_is_project_admin(request.user, patient.project):
+        can_modify = True
+
+    if request.method == "POST" and can_modify:
+        action = request.POST.get("action")
+        if action == "update_management":
+            management_form = PatientManagementForm(
+                request.POST, instance=patient, user=request.user
+            )
+            if management_form.is_valid():
+                management_form.save()
+                messages.success(request, "Scan settings updated successfully!")
+                return redirect("urology:patient_detail", patient_id=patient_id)
+
+    patient_modalities = []
+    for modality in patient.modalities.all().order_by("name"):
+        patient_modalities.append({
+            "slug": modality.slug,
+            "name": modality.name,
+            "label": modality.label or "",
+            "subtypes": list(modality.subtypes or []),
+        })
+
+    # Prepare MRI volume grid data
+    modality_files = {}
+    mri_file = (
+        patient.files.filter(modality__slug="urology-mri").order_by("-created_at").first()
+        or patient.files.filter(
+            file_type__in=["urology_mri_raw", "urology_mri_processed"]
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if mri_file:
+        filename = os.path.basename(mri_file.file_path or "mri.nii.gz")
+        modality_files["urology-mri"] = {
+            "id": mri_file.id,
+            "file_type": mri_file.file_type,
+            "filename": filename,
+            "file_key": "primary",
+        }
+
+    viewer_grid_data = {
+        "scanId": patient.patient_id,
+        "projectNamespace": "urology",
+        "modalityFiles": modality_files,
+        "segmentationFile": None,
+        "enableDragDrop": False,
+        "defaultModality": "urology-mri" if mri_file else None,
+        "singleWindowMode": True,
+    }
+
+    # Prepare Digital Pathology WSI data
+    wsi_file = (
+        patient.files.filter(modality__slug="urology-wsi").order_by("-created_at").first()
+        or patient.files.filter(
+            file_type__in=["urology_wsi_raw", "urology_wsi_processed"]
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    wsi_data = None
+    if wsi_file:
+        latest_set = (
+            AnnotationSet.objects.filter(
+                urology_patient=patient, kind="measurements"
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        expected_revision = 0
+        annotations_list = []
+        if latest_set:
+            rev = latest_set.revisions.order_by("-revision_number").first()
+            if rev:
+                expected_revision = rev.revision_number
+                payload = rev.payloads.filter(format=PayloadFormat.CORNERSTONE_STATE).first()
+                if payload and isinstance(payload.data, dict):
+                    annotations_list = payload.data.get("annotations") or []
+
+        wsi_data = {
+            "patientId": patient.patient_id,
+            "fileId": wsi_file.id,
+            "revision": expected_revision,
+            "annotations": annotations_list,
+            "csrfToken": get_token(request),
+            "namespace": "urology",
+        }
+
+    patient_files = {"raw": [], "processed": [], "other": []}
+    for file_obj in patient.files.all().order_by("-created_at"):
+        file_data = {
+            "id": file_obj.id,
+            "file_type": file_obj.file_type,
+            "file_path": file_obj.file_path,
+            "file_size": file_obj.file_size,
+            "created_at": file_obj.created_at,
+            "filename": os.path.basename(file_obj.file_path) if file_obj.file_path else "Unknown",
+            "original_filename": file_obj.metadata.get("original_filename", "") if file_obj.metadata else "",
+            "file_size_mb": f"{file_obj.file_size / (1024 * 1024):.2f}" if file_obj.file_size else "0.00",
+            "modality_name": file_obj.modality.name if file_obj.modality else "",
+        }
+        if "_raw" in file_obj.file_type:
+            patient_files["raw"].append(file_data)
+        elif "_processed" in file_obj.file_type:
+            patient_files["processed"].append(file_data)
+        else:
+            patient_files["other"].append(file_data)
+
+    voice_captions = patient.voice_captions.all()
+    is_admin_user = user_is_project_admin(request.user, patient.project)
+    for caption in voice_captions:
+        caption.can_view_content = bool(
+            is_admin_user or caption.user_id == request.user.id
+        )
+        caption.can_edit_content = bool(
+            is_admin_user or caption.user_id == request.user.id
+        )
+        caption.is_ghost = not caption.can_view_content
+
+    allowed_modalities = list(
+        Modality.objects.filter(
+            projects__id=request.session.get("current_project_id"),
+            is_active=True,
+        )
+    )
+    if not allowed_modalities:
+        allowed_modalities = list(
+            Modality.objects.filter(domain="urology", is_active=True)
+        )
+
+    _raw_lock_reasons = annotation_lock_reasons(patient)
+
+    context = {
+        "patient": patient,
+        "user_profile": request.user.profile,
+        "management_form": management_form,
+        "has_cbct": False,
+        "has_uploaded_panoramic": False,
+        "can_modify_segmentation": can_modify,
+        "can_create_caption": can_modify,
+        "patient_modalities": patient_modalities,
+        "has_mri": bool(mri_file),
+        "has_wsi": bool(wsi_file),
+        "mri_file": mri_file,
+        "wsi_file": wsi_file,
+        "default_modality_slug": "urology-mri" if mri_file else ("urology-wsi" if wsi_file else None),
+        "django_data": {
+            "canEdit": bool(can_modify),
+            "scanId": patient.patient_id,
+            "hasIOS": False,
+            "hasCBCT": False,
+            "isCBCTProcessed": False,
+            "modalities": patient_modalities,
+            "defaultModality": "urology-mri" if mri_file else ("urology-wsi" if wsi_file else None),
+        },
+        "viewer_grid_data": viewer_grid_data,
+        "wsi_data": wsi_data,
+        "patient_files": patient_files,
+        "raw_data_locked": bool(_raw_lock_reasons),
+        "raw_lock_message": lock_message(_raw_lock_reasons),
+        "voice_captions": voice_captions,
+        "is_admin_user": is_admin_user,
+        "modality_files": modality_files,
+        "rerunnable_step_slugs": [
+            m["slug"] for m in patient_modalities if m.get("slug") != "rawzip"
+        ],
+        "allowed_modalities": allowed_modalities,
+        "allowed_modality_slugs": [m.slug for m in allowed_modalities],
+    }
+
+    allowed_annotations = []
+    if getattr(patient, "project", None) is not None:
+        allowed_annotations = list(
+            patient.project.annotation_methods.filter(is_active=True).values_list(
+                "slug", flat=True
+            )
+        )
+    captions_enabled = "voice_caption" in allowed_annotations
+    context["allowed_annotations"] = allowed_annotations
+    context["captions_enabled"] = captions_enabled
+    context["default_tab"] = "captions" if captions_enabled else "files"
+
+    record_recent(
+        request.user,
+        "urology",
+        patient.patient_id,
+        patient_name=getattr(patient, "name", "") or "",
+        project_label=patient.project.name if patient.project else "",
+    )
+
+    return render_with_fallback(request, "patient_detail", context)
 
 
 @login_required

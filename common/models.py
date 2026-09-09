@@ -750,6 +750,11 @@ class FileRegistry(DomainFKAccessorMixin, models.Model):
 		# Generic video modality (used by laparoscopy and any future video domain)
 		('video_raw', 'Video Raw'),
 		('video_processed', 'Video Processed'),
+		# Urology modalities
+		('urology_mri_raw', 'Urology MRI Raw'),
+		('urology_mri_processed', 'Urology MRI Processed'),
+		('urology_wsi_raw', 'Urology WSI Raw'),
+		('urology_wsi_processed', 'Urology WSI Processed'),
 		# Dense annotation artifacts. Sparse annotations are MySQL rows (decision #20);
 		# a labelmap is not sparse, and the governing rule already says dense segmentation
 		# is a file artifact in object storage. Addressed by an AnnotationPayload, never

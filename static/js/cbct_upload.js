@@ -153,6 +153,11 @@
                 window.location.href = data.redirect;
                 return;
             }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                const targetUrl = (data && data.redirect) || xhr.responseURL || window.location.href;
+                window.location.href = targetUrl;
+                return;
+            }
             const message = data && data.error ? data.error : `Upload failed (HTTP ${xhr.status}).`;
             notify('danger', message);
             if (progress) progress.hidden = true;

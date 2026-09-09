@@ -3,7 +3,10 @@ from django.core.management import call_command
 from django.test import TestCase, Client
 from django.urls import reverse
 
-from common.models import Modality, Project, ProjectAccess
+from io import BytesIO
+from unittest.mock import MagicMock, patch
+
+from common.models import FileRegistry, Modality, Project, ProjectAccess
 from urology.models import Folder, Patient, Tag, UrologyProject
 
 
@@ -54,14 +57,200 @@ class UrologyDomainTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Test Patient 1")
 
-    def test_urology_placeholders(self):
+    def test_urology_upload_get(self):
         upload_resp = self.client.get("/urology/upload/")
         self.assertEqual(upload_resp.status_code, 200)
-        self.assertContains(upload_resp, "Upload Scan")
+        self.assertContains(upload_resp, "Upload patient data")
+        self.assertContains(upload_resp, "Urology MRI")
+        self.assertContains(upload_resp, "Digital Pathology WSI")
 
+    def test_urology_upload_post(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from common.models import FileRegistry, Job
+
+        mri_file = SimpleUploadedFile("mri_scan.nii.gz", b"FAKE_NIFTI_DATA", content_type="application/gzip")
+        wsi_file = SimpleUploadedFile("histology.tiff", b"FAKE_TIFF_DATA", content_type="image/tiff")
+
+        post_data = {
+            "name": "Uploaded Urology Patient",
+            "project": self.project.id,
+            "folder": self.folder.id,
+            "tags_text": "upload-test, biopsy",
+            "urology-mri": mri_file,
+            "urology-wsi": wsi_file,
+        }
+
+        resp = self.client.post("/urology/upload/", data=post_data, follow=True)
+        self.assertEqual(resp.status_code, 200)
+
+        patient = Patient.objects.filter(name="Uploaded Urology Patient").first()
+        self.assertIsNotNone(patient)
+        self.assertEqual(patient.folder, self.folder)
+        self.assertIn("biopsy", patient.tag_names())
+
+        files = FileRegistry.objects.filter(domain="urology", urology_patient=patient)
+        self.assertEqual(files.count(), 2)
+        mri_fr = files.filter(modality__slug="urology-mri").first()
+        wsi_fr = files.filter(modality__slug="urology-wsi").first()
+        self.assertIsNotNone(mri_fr)
+        self.assertIsNotNone(wsi_fr)
+        self.assertEqual(mri_fr.file_type, "urology_mri_raw")
+        self.assertEqual(wsi_fr.file_type, "urology_wsi_raw")
+
+        jobs = Job.objects.filter(domain="urology", urology_patient=patient)
+        self.assertEqual(jobs.count(), 2)
+
+    def test_urology_patient_detail(self):
         detail_resp = self.client.get(f"/urology/patient/{self.patient.patient_id}/")
         self.assertEqual(detail_resp.status_code, 200)
-        self.assertContains(detail_resp, f"Patient {self.patient.patient_id}")
+        self.assertContains(detail_resp, self.patient.name)
+        self.assertContains(detail_resp, f"ID {self.patient.patient_id}")
+        self.assertContains(detail_resp, "urology-multimodal-bar")
+        self.assertContains(detail_resp, "urologyMriStage")
+        self.assertContains(detail_resp, "urologyWsiStagePanel")
+
+    @patch("urology.wsi_views.open_binary")
+    @patch("urology.wsi_views.get_wsi_metadata")
+    def test_urology_wsi_metadata(self, mock_get_metadata, mock_open_binary):
+        mock_open_binary.return_value = (BytesIO(b"dummy_tiff"), MagicMock())
+        mock_get_metadata.return_value = {
+            "width": 1024,
+            "height": 1024,
+            "tileWidth": 256,
+            "tileHeight": 256,
+            "levels": [{"level": 0, "width": 1024, "height": 1024, "downsample": 1.0, "cols": 4, "rows": 4}],
+            "mpp": 0.25,
+            "magnification": 40.0,
+            "vendor": "generic",
+        }
+        wsi_modality = Modality.objects.get(slug="urology-wsi")
+        fr = FileRegistry.objects.create(
+            domain="urology",
+            urology_patient=self.patient,
+            modality=wsi_modality,
+            file_type="urology_wsi_raw",
+            file_path="urology/test.tiff",
+            file_size=1024,
+            file_hash="hash123",
+            metadata={"original_filename": "test.tiff"},
+        )
+        resp = self.client.get(f"/urology/api/wsi/{fr.id}/metadata/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["fileId"], fr.id)
+        self.assertEqual(data["width"], 1024)
+        self.assertEqual(data["mpp"], 0.25)
+
+    @patch("urology.wsi_views.open_binary")
+    @patch("urology.wsi_views.get_wsi_tile")
+    def test_urology_wsi_tile(self, mock_get_tile, mock_open_binary):
+        mock_open_binary.return_value = (BytesIO(b"dummy_tiff"), MagicMock())
+        mock_get_tile.return_value = b"\x89PNG\r\n\x1a\nfake_png"
+        wsi_modality = Modality.objects.get(slug="urology-wsi")
+        fr = FileRegistry.objects.create(
+            domain="urology",
+            urology_patient=self.patient,
+            modality=wsi_modality,
+            file_type="urology_wsi_raw",
+            file_path="urology/test_tile.tiff",
+            file_size=1024,
+            file_hash="hash_tile",
+            metadata={"original_filename": "test_tile.tiff"},
+        )
+        resp = self.client.get(f"/urology/api/wsi/{fr.id}/tile/0/1_2.png")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/png")
+        self.assertEqual(resp.content, b"\x89PNG\r\n\x1a\nfake_png")
+
+        # Test If-None-Match 304 caching
+        etag = f'"{fr.file_hash}_0_1_2"'
+        resp_cached = self.client.get(
+            f"/urology/api/wsi/{fr.id}/tile/0/1_2.png",
+            HTTP_IF_NONE_MATCH=etag,
+        )
+        self.assertEqual(resp_cached.status_code, 304)
+
+    @patch("urology.wsi_views.open_binary")
+    @patch("urology.wsi_views.get_wsi_thumbnail")
+    def test_urology_wsi_thumbnail(self, mock_get_thumb, mock_open_binary):
+        mock_open_binary.return_value = (BytesIO(b"dummy_tiff"), MagicMock())
+        mock_get_thumb.return_value = b"\xff\xd8\xfffake_jpg"
+        wsi_modality = Modality.objects.get(slug="urology-wsi")
+        fr = FileRegistry.objects.create(
+            domain="urology",
+            urology_patient=self.patient,
+            modality=wsi_modality,
+            file_type="urology_wsi_raw",
+            file_path="urology/test_thumb.tiff",
+            file_size=1024,
+            file_hash="hash_thumb",
+            metadata={"original_filename": "test_thumb.tiff"},
+        )
+        resp = self.client.get(f"/urology/api/wsi/{fr.id}/thumbnail/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "image/jpeg")
+
+    def test_urology_measurements_state_and_save(self):
+        # 1. State should be empty initially
+        state_resp = self.client.get(f"/urology/api/patients/{self.patient.patient_id}/measurements/state/")
+        self.assertEqual(state_resp.status_code, 200)
+        state_data = state_resp.json()
+        self.assertEqual(state_data["revision"], 0)
+        self.assertEqual(state_data["annotations"], [])
+
+        # 2. Save measurement
+        wsi_modality = Modality.objects.get(slug="urology-wsi")
+        fr = FileRegistry.objects.create(
+            domain="urology",
+            urology_patient=self.patient,
+            modality=wsi_modality,
+            file_type="urology_wsi_raw",
+            file_path="urology/test_save.tiff",
+            file_size=1024,
+            file_hash="hash_save",
+        )
+        import json
+        save_payload = {
+            "fileId": fr.id,
+            "expectedRevision": 0,
+            "coordinateSystem": "image_pixel",
+            "volumeDescriptor": {
+                "wsi": True,
+                "mpp": 0.25,
+            },
+            "annotations": [
+                {
+                    "annotationUID": "test-annotation-1",
+                    "metadata": {
+                        "toolName": "Length",
+                    },
+                    "data": {
+                        "handles": {
+                            "points": [
+                                [100.0, 100.0],
+                                [200.0, 100.0],
+                            ]
+                        }
+                    },
+                }
+            ],
+        }
+        save_resp = self.client.post(
+            f"/urology/api/patients/{self.patient.patient_id}/measurements/",
+            data=json.dumps(save_payload),
+            content_type="application/json",
+        )
+        self.assertEqual(save_resp.status_code, 200)
+        save_result = save_resp.json()
+        self.assertEqual(save_result["revision"], 1)
+
+        # 3. Verify state returns revision 1 and the saved annotation
+        state_resp2 = self.client.get(f"/urology/api/patients/{self.patient.patient_id}/measurements/state/")
+        self.assertEqual(state_resp2.status_code, 200)
+        state_data2 = state_resp2.json()
+        self.assertEqual(state_data2["revision"], 1)
+        self.assertEqual(len(state_data2["annotations"]), 1)
+        self.assertEqual(state_data2["annotations"][0]["metadata"]["toolName"], "Length")
 
     def test_urology_folder_operations(self):
         create_resp = self.client.post(

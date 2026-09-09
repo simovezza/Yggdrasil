@@ -151,6 +151,7 @@ const APP_ENTRIES = [
     'mesh-landmarks',
     'panoramic-cpr',
     'video-annotate',
+    'wsi-viewer',
 ];
 
 /**

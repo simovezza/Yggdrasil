@@ -1,0 +1,281 @@
+{% load static %}
+{% load cornerstone %}
+
+<link rel="stylesheet" href="{% static 'css/viewer_grid.css' %}">
+<style>
+.urology-multimodal-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 6px 12px;
+    margin-bottom: 12px;
+}
+.urology-multimodal-bar .btn-group .btn {
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+.urology-stage-container {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    min-height: 620px;
+    height: calc(100vh - 280px);
+}
+.urology-stage-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    position: relative;
+    background: #0f172a;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+.urology-stage-panel.is-hidden {
+    display: none !important;
+}
+.wsi-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #1e293b;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e2e8f0;
+    font-size: 13px;
+    z-index: 5;
+}
+.wsi-toolbar .btn-group .btn, .wsi-toolbar button.btn {
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.wsi-canvas-host {
+    flex: 1;
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 480px;
+    overflow: hidden;
+}
+</style>
+
+<!-- JSON Script Payloads -->
+{{ viewer_grid_data|json_script:"viewerGridData" }}
+{% if wsi_data %}
+{{ wsi_data|json_script:"urologyWsiData" }}
+{% endif %}
+
+{% include 'common/sections/patient_header_section.html' %}
+
+<!-- Multimodal Switcher Bar -->
+<div class="urology-multimodal-bar">
+    <span class="text-white small fw-bold me-2"><i class="fas fa-layer-group me-1"></i>Modality View:</span>
+    <div class="btn-group" role="group" aria-label="Viewer Modality">
+        <button type="button" class="btn btn-sm btn-outline-primary active" id="urologyModeMriBtn" title="View Prostate mpMRI">
+            <i class="fas fa-magnet me-1"></i>MRI (mpMRI)
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="urologyModeWsiBtn" title="View Digital Pathology WSI">
+            <i class="fas fa-microscope me-1"></i>WSI (Histopathology)
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="urologyModeSplitBtn" title="Side-by-side Radiologic-Pathologic Correlation">
+            <i class="fas fa-columns me-1"></i>Split Correlation View
+        </button>
+    </div>
+    <span class="text-muted small ms-auto" id="urologyModeNotice">
+        {% if has_mri and has_wsi %}
+            mpMRI &amp; Digital Pathology available
+        {% elif has_mri %}
+            mpMRI volume available
+        {% elif has_wsi %}
+            Digital Pathology slide available
+        {% else %}
+            Upload scans to view
+        {% endif %}
+    </span>
+</div>
+
+<div class="patient-view-grid">
+    <!-- Viewers Column -->
+    <div class="patient-view-viewer">
+        <div class="urology-stage-container" id="urologyStageContainer">
+            <!-- MRI Stage (Cornerstone3D Volume Grid) -->
+            <div class="urology-stage-panel" id="urologyMriStage">
+                <!-- Modality Chips (Draggable) -->
+                <div class="p-2 border-bottom border-secondary bg-dark bg-opacity-25">
+                    <div class="d-flex align-items-center flex-wrap gap-2">
+                        <span class="viewer-toolbar__label text-light small">Drag onto a window:</span>
+                        <div id="modalityChipsContainer" class="d-flex flex-wrap gap-2">
+                            {% if patient_modalities %}
+                                {% for m in patient_modalities %}
+                                    {% if m.slug != 'rawzip' %}
+                                        <div class="modality-chip" data-modality="{{ m.slug }}" draggable="true">
+                                            {% if m.label %}{{ m.label }}{% elif m.name %}{{ m.name }}{% else %}{{ m.slug|upper }}{% endif %}
+                                        </div>
+                                    {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted small">No modalities configured</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MRI Toolbar -->
+                <div class="viewer-toolbar">
+                    <div class="viewer-toolbar__group" id="cbctControls">
+                        {% include 'common/sections/volume_grid_toolbar.html' with grid_has_3d=False grid_has_crosshairs=True grid_can_annotate=can_modify_segmentation %}
+                    </div>
+                </div>
+
+                <!-- 1x1 Single Viewer Grid -->
+                <div class="viewer-grid" style="flex: 1; min-height: 480px; display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; width: 100%; height: 100%;">
+                    <div class="viewer-window" data-window-index="0"><div class="drop-hint"><i class="fas fa-arrow-down"></i><p>Drop modality here</p></div></div>
+                </div>
+            </div>
+
+            <!-- WSI Stage (CornerstoneJS Digital Pathology Multi-resolution Pyramid) -->
+            <div class="urology-stage-panel is-hidden" id="urologyWsiStagePanel">
+                <!-- WSI Toolbar -->
+                <div class="wsi-toolbar">
+                    <!-- Navigation & Annotation Tools -->
+                    <div class="btn-group me-2" role="group" aria-label="WSI Tools">
+                        <button type="button" class="btn btn-dark active" id="urologyWsiToolPan" title="Pan / Navigate">
+                            <i class="fas fa-hand"></i> Pan
+                        </button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiToolLength" title="Calibrated Ruler (µm / mm)">
+                            <i class="fas fa-ruler"></i> Ruler
+                        </button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiToolRect" title="Rectangle ROI (Area)">
+                            <i class="fas fa-vector-square"></i> Rect
+                        </button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiToolCircle" title="Circle ROI">
+                            <i class="fas fa-circle"></i> Circle
+                        </button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiToolSpline" title="Spline / Boundary (Gleason / Tumor Outline)">
+                            <i class="fas fa-draw-polygon"></i> Spline
+                        </button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiToolLabel" title="Point Marker & Name">
+                            <i class="fas fa-tag"></i> Label
+                        </button>
+                    </div>
+
+                    <!-- Magnification Controls -->
+                    <div class="btn-group me-2" role="group" aria-label="Magnification">
+                        <button type="button" class="btn btn-dark" id="urologyWsiFit" title="Fit Slide to Window">Fit</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag1">1.25x</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag2">2.5x</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag5">5x</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag10">10x</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag20">20x</button>
+                        <button type="button" class="btn btn-dark" id="urologyWsiMag40">40x</button>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="ms-auto d-flex align-items-center gap-2">
+                        <span id="urologyWsiStatus" class="small text-muted me-1"></span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="urologyWsiToggleVisibilityBtn" title="Toggle Annotations">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="urologyWsiClearBtn" title="Clear Annotations">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-success" id="urologyWsiSaveBtn" title="Save Annotations">
+                            <i class="fas fa-floppy-disk"></i> Save
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Host for WSI tiled canvas, SVG layer, minimap -->
+                <div class="wsi-canvas-host" id="urologyWsiStage"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabbed sidebar -->
+    <div class="side-panel">
+        <div class="side-panel__tabs" role="tablist">
+            <button type="button" class="side-tab {% if captions_enabled %}is-active{% endif %}" data-tab-target="captions">Captions</button>
+            <button type="button" class="side-tab {% if not captions_enabled %}is-active{% endif %}" data-tab-target="files">Files</button>
+            <button type="button" class="side-tab" data-tab-target="settings">Settings</button>
+            <button type="button" class="side-tab" data-tab-target="activity">Activity</button>
+        </div>
+        <div class="side-panel__body">
+            <div class="side-tab-pane {% if default_tab == 'captions' %}is-active{% endif %}" data-tab-pane="captions">
+                {% include 'common/sections/vocal_caption_section.html' with vocal_caption_open=True %}
+            </div>
+            <div class="side-tab-pane {% if default_tab == 'files' %}is-active{% endif %}" data-tab-pane="files">
+                {% include 'common/sections/file_management_section.html' %}
+            </div>
+            <div class="side-tab-pane" data-tab-pane="settings">
+                {% include 'common/sections/scan_settings_section.html' %}
+            </div>
+            <div class="side-tab-pane" data-tab-pane="activity">
+                {% include 'common/sections/activity_section.html' %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Back Button -->
+<div class="mt-3">
+    {% firstof request.resolver_match.namespace 'urology' as ns %}
+    <a href="{% url ns|add:':patient_list' %}" class="btn btn-secondary">
+        <i class="fas fa-arrow-left me-2"></i>Back to Scan List
+    </a>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const mriBtn = document.getElementById('urologyModeMriBtn');
+    const wsiBtn = document.getElementById('urologyModeWsiBtn');
+    const splitBtn = document.getElementById('urologyModeSplitBtn');
+
+    const mriStage = document.getElementById('urologyMriStage');
+    const wsiStagePanel = document.getElementById('urologyWsiStagePanel');
+
+    function setViewMode(mode) {
+        mriBtn?.classList.remove('active');
+        wsiBtn?.classList.remove('active');
+        splitBtn?.classList.remove('active');
+
+        if (mode === 'mri') {
+            mriBtn?.classList.add('active');
+            mriStage?.classList.remove('is-hidden');
+            wsiStagePanel?.classList.add('is-hidden');
+        } else if (mode === 'wsi') {
+            wsiBtn?.classList.add('active');
+            mriStage?.classList.add('is-hidden');
+            wsiStagePanel?.classList.remove('is-hidden');
+        } else if (mode === 'split') {
+            splitBtn?.classList.add('active');
+            mriStage?.classList.remove('is-hidden');
+            wsiStagePanel?.classList.remove('is-hidden');
+        }
+
+        // Trigger window resize and WSI viewport adaptation
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+            if (mode === 'wsi' || mode === 'split') {
+                const stage = document.getElementById('urologyWsiStage');
+                if (stage && stage.__wsiViewport) {
+                    stage.__wsiViewport.resize();
+                }
+            }
+        }, 50);
+    }
+
+    mriBtn?.addEventListener('click', () => setViewMode('mri'));
+    wsiBtn?.addEventListener('click', () => setViewMode('wsi'));
+    splitBtn?.addEventListener('click', () => setViewMode('split'));
+
+    // If patient has only WSI, start in WSI mode
+    {% if not has_mri and has_wsi %}
+    setViewMode('wsi');
+    {% endif %}
+});
+</script>

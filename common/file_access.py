@@ -117,7 +117,7 @@ def authorize_file_read(user, file_obj, namespace=None):
     if patient is None:
         # Tolerate mis-filed rows: fall back across the other domains' FKs
         # rather than 403-ing on data the uploader wrote to the wrong column.
-        for other_domain in ("maxillo", "brain", "laparoscopy"):
+        for other_domain in ("maxillo", "brain", "laparoscopy", "urology"):
             other_fk, _ = fk_fields_for(other_domain)
             patient = getattr(file_obj, other_fk, None)
             if patient is not None:
@@ -133,7 +133,7 @@ def authorize_file_read(user, file_obj, namespace=None):
 
         caption = getattr(file_obj, caption_fk, None)
         if caption is None:
-            for other_domain in ("maxillo", "brain", "laparoscopy"):
+            for other_domain in ("maxillo", "brain", "laparoscopy", "urology"):
                 _, other_caption_fk = fk_fields_for(other_domain)
                 caption = getattr(file_obj, other_caption_fk, None)
                 if caption is not None:
