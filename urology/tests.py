@@ -109,6 +109,39 @@ class UrologyDomainTests(TestCase):
         self.assertContains(detail_resp, "urologyMriStage")
         self.assertContains(detail_resp, "urologyWsiStagePanel")
 
+    def test_urology_report_template_voices(self):
+        detail_resp = self.client.get(f"/urology/patient/{self.patient.patient_id}/")
+        self.assertEqual(detail_resp.status_code, 200)
+
+        # Verify key Italian Urology report voices are rendered
+        self.assertContains(detail_resp, "Volume Prostatico e Densità del PSA")
+        self.assertContains(detail_resp, "Sede e Settore della Lesione Indice")
+        self.assertContains(detail_resp, "Dimensioni della Lesione")
+        self.assertContains(detail_resp, "Punteggio PI-RADS")
+        self.assertContains(detail_resp, "Intensità T2 e Restrizione in Diffusione (ADC)")
+        self.assertContains(detail_resp, "Impregnazione di Contrasto Dinamica")
+        self.assertContains(detail_resp, "Estensione Extracapsulare")
+        self.assertContains(detail_resp, "Invasione delle Vescicole Seminali")
+        self.assertContains(detail_resp, "Rapporti con Fasci Neurovascolari e Collo Vescicale")
+        self.assertContains(detail_resp, "Linfonodi Regionali e Scheletro del Bacino")
+        self.assertContains(detail_resp, "Istotipo Tumorale")
+        self.assertContains(detail_resp, "Gleason Score e Grade Group ISUP")
+        self.assertContains(detail_resp, "Percentuale Pattern 4 o 5 e Architettura Cribriforme")
+        self.assertContains(detail_resp, "Carcinoma Intraduttale")
+        self.assertContains(detail_resp, "Invasione Perineurale e Vascolare")
+        self.assertContains(detail_resp, "Estensione Tumorale nel Prelievo e Margini Chirurgici")
+        self.assertContains(detail_resp, "Parenchima Non Tumorale e Lesioni Concomitanti")
+        self.assertContains(detail_resp, "Correlazione Radio-Patologica e Reperti Conclusivi")
+
+        # Verify no repeated acronym clutter in report section
+        self.assertNotContains(detail_resp, "(RM)")
+        self.assertNotContains(detail_resp, "(WSI)")
+
+        # Verify other domain templates are not rendered in urology
+        self.assertNotContains(detail_resp, "Classe Scheletrica")
+        self.assertNotContains(detail_resp, "Overjet")
+        self.assertNotContains(detail_resp, "Invasione Ependimale")
+
     @patch("urology.wsi_views.open_binary")
     @patch("urology.wsi_views.get_wsi_metadata")
     def test_urology_wsi_metadata(self, mock_get_metadata, mock_open_binary):
