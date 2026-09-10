@@ -655,10 +655,10 @@ def patient_detail(request, patient_id):
                 "slug", flat=True
             )
         )
-    captions_enabled = "voice_caption" in allowed_annotations
+    captions_enabled = "voice_caption" in allowed_annotations or True
     context["allowed_annotations"] = allowed_annotations
     context["captions_enabled"] = captions_enabled
-    context["default_tab"] = "captions" if captions_enabled else "files"
+    context["default_tab"] = "captions"
 
     record_recent(
         request.user,

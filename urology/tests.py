@@ -109,6 +109,12 @@ class UrologyDomainTests(TestCase):
         self.assertContains(detail_resp, "urologyMriStage")
         self.assertContains(detail_resp, "urologyWsiStagePanel")
 
+        # Verify Captions menu/tab is active by default instead of Files
+        self.assertContains(detail_resp, 'class="side-tab is-active" data-tab-target="captions"')
+        self.assertContains(detail_resp, 'class="side-tab-pane is-active" data-tab-pane="captions"')
+        self.assertNotContains(detail_resp, 'class="side-tab is-active" data-tab-target="files"')
+        self.assertNotContains(detail_resp, 'class="side-tab-pane is-active" data-tab-pane="files"')
+
     def test_urology_report_template_voices(self):
         detail_resp = self.client.get(f"/urology/patient/{self.patient.patient_id}/")
         self.assertEqual(detail_resp.status_code, 200)

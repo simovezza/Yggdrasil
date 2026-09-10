@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from common.models import Modality, Project
+from common.models import AnnotationMethod, Modality, Project
 
 
 class Command(BaseCommand):
@@ -66,6 +66,13 @@ class Command(BaseCommand):
             project.modalities.add(modality)
             self.stdout.write(
                 self.style.SUCCESS(f"Linked {modality.name} to {project.name} project")
+            )
+
+        voice_caption = AnnotationMethod.objects.filter(slug="voice_caption").first()
+        if voice_caption:
+            project.annotation_methods.add(voice_caption)
+            self.stdout.write(
+                self.style.SUCCESS(f"Linked {voice_caption.name} to {project.name} project")
             )
 
         self.stdout.write(
