@@ -20,6 +20,41 @@ urlpatterns = [
         name="update_patient_name",
     ),
     path(
+        "patient/<int:patient_id>/files/raw/add/",
+        views.add_raw_file,
+        name="add_raw_file",
+    ),
+    path(
+        "patient/<int:patient_id>/files/raw/<int:file_id>/delete/",
+        views.delete_raw_file,
+        name="delete_raw_file",
+    ),
+    path(
+        "patient/<int:patient_id>/text-caption/",
+        views.upload_text_caption,
+        name="upload_text_caption",
+    ),
+    path(
+        "patient/<int:patient_id>/voice-caption/<int:caption_id>/delete/",
+        views.delete_voice_caption,
+        name="delete_voice_caption",
+    ),
+    path(
+        "patient/<int:patient_id>/voice-caption/<int:caption_id>/edit/",
+        views.edit_voice_caption_transcription,
+        name="edit_voice_caption_transcription",
+    ),
+    path(
+        "patient/<int:patient_id>/voice-caption/<int:caption_id>/update-modality/",
+        views.update_voice_caption_modality,
+        name="update_voice_caption_modality",
+    ),
+    path(
+        "patients/bulk-upload/",
+        views.bulk_upload_patients,
+        name="bulk_upload_patients",
+    ),
+    path(
         "patient/<int:patient_id>/tags/add/",
         views.add_patient_tag,
         name="add_patient_tag",

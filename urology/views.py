@@ -9,9 +9,11 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import redirect_to_login
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponseGone, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
@@ -20,7 +22,7 @@ from django.middleware.csrf import get_token
 from annotations.models import AnnotationSet
 from annotations.constants import PayloadFormat
 from common import export_catalog, export_ui
-from common.activity import record_recent
+from common.activity import log_activity, record_recent
 from common.deletion import FolderNotEmpty, delete_folder as _delete_folder
 from common.export_processing import (
     ExportProcessor,
@@ -43,7 +45,11 @@ from common.annotation_lock import annotation_lock_reasons, lock_message
 from common.permissions import (
     filter_folders_for_user,
     filter_patients_for_user,
+    project_allows_annotation,
+    user_can_delete_caption,
     user_can_delete_single_patient,
+    user_can_edit_caption,
+    user_can_write_annotations,
     user_can_write_patient_annotations,
     user_has_project_access,
     user_is_project_admin,
@@ -54,7 +60,7 @@ from .export_config import install_urology_export_mappings
 from .file_utils import save_urology_modality_file
 from .forms import PatientForm, PatientManagementForm, PatientUploadForm
 from .helpers import redirect_with_namespace, render_with_fallback
-from .models import Export, Folder, Patient, Tag
+from .models import Export, Folder, Patient, Tag, VoiceCaption
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +100,23 @@ def patient_list(request):
         )
     )
     current_project_id = request.session.get("current_project_id")
+    current_project = None
+    if current_project_id:
+        current_project = (
+            Project.objects.filter(id=current_project_id, domain="urology", is_active=True)
+            .prefetch_related("modalities", "annotation_methods")
+            .first()
+        )
+    if not current_project:
+        current_project = (
+            Project.objects.filter(domain="urology", is_active=True)
+            .prefetch_related("modalities", "annotation_methods")
+            .first()
+        )
+        if current_project:
+            current_project_id = current_project.id
+            request.session["current_project_id"] = current_project.id
+
     if current_project_id and any(field.name == "project" for field in Patient._meta.fields):
         patients = patients.filter(project_id=current_project_id)
     patients = filter_patients_for_user(request.user, patients, "urology")
@@ -124,20 +147,9 @@ def patient_list(request):
         patients = patients.filter(voice_captions__isnull=False).distinct()
 
     patients = patients.order_by("-uploaded_at")
-    allowed_modalities = []
-    current_project = None
-    if current_project_id:
-        project = (
-            Project.objects.filter(id=current_project_id)
-            .prefetch_related("modalities", "annotation_methods")
-            .first()
-        )
-        if project:
-            current_project = project
-            allowed_modalities = list(project.modalities.filter(is_active=True))
-
-    if not allowed_modalities:
-        # Fall back to default Urology modalities
+    if current_project:
+        allowed_modalities = list(current_project.modalities.filter(is_active=True))
+    else:
         allowed_modalities = list(
             Modality.objects.filter(domain="urology", is_active=True).order_by("name")
         )
@@ -283,6 +295,9 @@ def patient_list(request):
                 if m.slug != "rawzip"
             ],
         ),
+        "bulk_upload_url": reverse("urology:bulk_upload_patients")
+        if (getattr(request.user, "profile", None) and request.user.profile.can_upload_scans())
+        else None,
     }
     return render_with_fallback(request, "patient_list", context)
 
@@ -299,15 +314,16 @@ def upload_patient(request):
     current_project_id = request.session.get("current_project_id")
     project = None
     if current_project_id:
-        try:
-            project = Project.objects.prefetch_related("modalities").get(
-                id=current_project_id
-            )
-        except Project.DoesNotExist:
-            project = None
+        project = (
+            Project.objects.prefetch_related("modalities")
+            .filter(id=current_project_id, domain=namespace, is_active=True)
+            .first()
+        )
 
     if project is None:
         project = Project.objects.filter(domain=namespace, is_active=True).first()
+        if project:
+            request.session["current_project_id"] = project.id
 
     folders = filter_folders_for_user(
         request.user,
@@ -381,6 +397,9 @@ def upload_patient(request):
                             "patient_upload_form": patient_upload_form,
                             "folders": allowed_folders,
                             "allowed_modalities": allowed_modalities,
+                            "bulk_upload_url": reverse("urology:bulk_upload_patients")
+                            if (user_profile and user_profile.can_upload_scans())
+                            else None,
                         },
                     )
 
@@ -433,7 +452,6 @@ def upload_patient(request):
                 messages.success(request, "Patient uploaded successfully!")
 
             if is_xhr:
-                from django.urls import reverse, NoReverseMatch
                 try:
                     redirect_url = reverse(f"{namespace}:patient_list")
                 except NoReverseMatch:
@@ -455,6 +473,9 @@ def upload_patient(request):
             "patient_upload_form": patient_upload_form,
             "folders": folders,
             "allowed_modalities": allowed_modalities,
+            "bulk_upload_url": reverse("urology:bulk_upload_patients")
+            if (user_profile and user_profile.can_upload_scans())
+            else None,
         },
     )
 
@@ -1113,13 +1134,22 @@ def _urology_shared_export_availability(share_token):
 
 def _current_export_project(request):
     project_id = request.session.get("current_project_id")
-    if not project_id:
-        return None
-    return (
-        Project.objects.filter(id=project_id)
-        .prefetch_related("modalities", "annotation_methods", "disabled_steps")
-        .first()
-    )
+    project = None
+    if project_id:
+        project = (
+            Project.objects.filter(id=project_id, domain="urology", is_active=True)
+            .prefetch_related("modalities", "annotation_methods", "disabled_steps")
+            .first()
+        )
+    if not project:
+        project = (
+            Project.objects.filter(domain="urology", is_active=True)
+            .prefetch_related("modalities", "annotation_methods", "disabled_steps")
+            .first()
+        )
+        if project:
+            request.session["current_project_id"] = project.id
+    return project
 
 
 @login_required
@@ -1142,7 +1172,7 @@ def export_list(request):
 
     return render(
         request,
-        "maxillo/export_list.html",
+        "urology/export_list.html",
         {"exports": page_obj, "page_obj": page_obj, "ns": "urology"},
     )
 
@@ -1226,7 +1256,7 @@ def export_new(request):
 
     return render(
         request,
-        "maxillo/export_new.html",
+        "urology/export_new.html",
         {
             "project": project,
             "folders": folders,
@@ -1441,7 +1471,7 @@ def export_shared_landing(request, share_token):
         return redirect_to_login(request.get_full_path())
     return render(
         request,
-        "maxillo/export_shared_landing.html",
+        "urology/export_shared_landing.html",
         {
             "ns": "urology",
             "export": export,
@@ -1561,3 +1591,436 @@ def export_stop(request, export_id):
             "error_message": message,
         }
     )
+
+
+@login_required
+def upload_text_caption(request, patient_id):
+    """Handle text caption submission (alternative to voice recording)."""
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    project = getattr(patient, "project", None) or "urology"
+
+    if not (
+        user_is_project_admin(request.user, project)
+        or (patient.folder and user_can_write_annotations(request.user, patient.folder, request))
+        or user_can_write_patient_annotations(request.user, patient)
+    ):
+        return JsonResponse({"error": "Permission denied"}, status=403)
+    if not project_allows_annotation(patient, "voice_caption"):
+        return JsonResponse({"error": "Voice captions are disabled for this project"}, status=403)
+
+    try:
+        data = _json.loads(request.body) if request.body else request.POST
+        text_content = (data.get("text") or data.get("caption") or "").strip()
+        modality = (data.get("modality") or "").strip()
+
+        allowed_modalities = list(Modality.objects.filter(domain="urology", is_active=True))
+        allowed_slugs = {m.slug for m in allowed_modalities}
+        if not modality or modality not in allowed_slugs:
+            modality = allowed_modalities[0].slug if allowed_modalities else ""
+
+        if not text_content:
+            return JsonResponse({"error": "Text content cannot be empty"}, status=400)
+
+        voice_caption = VoiceCaption.objects.create(
+            patient=patient,
+            user=request.user,
+            modality=modality,
+            duration=0.0,
+            text_caption=text_content,
+            original_text_caption=text_content,
+            processing_status="completed",
+            is_edited=False,
+        )
+
+        log_activity(
+            request.user,
+            "urology",
+            patient.patient_id,
+            getattr(patient, "name", ""),
+            verb="captioned",
+            target="added a text caption",
+        )
+
+        return JsonResponse({
+            "success": True,
+            "caption": {
+                "id": voice_caption.id,
+                "user_username": voice_caption.user.username,
+                "modality": voice_caption.modality,
+                "modality_display": voice_caption.get_modality_display(),
+                "display_duration": "Text",
+                "quality_color": "success",
+                "created_at": voice_caption.created_at.strftime("%b %d, %H:%M"),
+                "audio_url": None,
+                "is_processed": True,
+                "text_caption": voice_caption.text_caption,
+                "is_text_caption": True,
+            },
+        })
+    except Exception as e:
+        logger.error(f"Error saving text caption in urology: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@login_required
+def delete_voice_caption(request, patient_id, caption_id):
+    if request.method != "DELETE":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    project = getattr(patient, "project", None) or "urology"
+
+    if not (
+        user_is_project_admin(request.user, project)
+        or (patient.folder and user_can_write_annotations(request.user, patient.folder, request))
+        or user_can_write_patient_annotations(request.user, patient)
+    ):
+        return JsonResponse({"error": "Permission denied"}, status=403)
+
+    voice_caption = get_object_or_404(VoiceCaption, id=caption_id, patient=patient)
+
+    is_owner = voice_caption.user_id == request.user.id
+    is_admin = user_is_project_admin(request.user, project)
+
+    if not is_owner and not is_admin:
+        return JsonResponse(
+            {
+                "error": "You cannot delete voice captions created by other users.",
+                "code": "not_owner",
+            },
+            status=403,
+        )
+
+    if is_admin and not is_owner:
+        data = _json.loads(request.body) if request.body else {}
+        if not data.get("admin_confirmed"):
+            return JsonResponse(
+                {
+                    "error": "Admin confirmation required",
+                    "code": "admin_confirmation_required",
+                    "message": f"You are about to delete a voice caption created by {voice_caption.user.username}. Please confirm this action.",
+                },
+                status=403,
+            )
+
+    try:
+        audio_file = voice_caption.get_audio_file()
+        if audio_file:
+            audio_file.delete()
+        voice_caption.delete()
+        return JsonResponse({"success": True})
+    except Exception as e:
+        logger.error(f"Error deleting voice caption: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@login_required
+@require_POST
+def edit_voice_caption_transcription(request, patient_id, caption_id):
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    voice_caption = get_object_or_404(VoiceCaption, id=caption_id, patient=patient)
+
+    if not user_can_edit_caption(request.user, voice_caption):
+        return JsonResponse(
+            {
+                "error": "You do not have permission to edit this transcription.",
+                "code": "permission_denied",
+            },
+            status=403,
+        )
+
+    try:
+        data = _json.loads(request.body) if request.body else request.POST
+        action = data.get("action")
+
+        if action == "edit":
+            new_text = (data.get("text") or "").strip()
+            if not new_text:
+                return JsonResponse({"error": "Transcription text cannot be empty"}, status=400)
+            voice_caption.edit_transcription(new_text, request.user)
+            return JsonResponse({
+                "success": True,
+                "message": "Transcription updated successfully",
+                "caption": {
+                    "id": voice_caption.id,
+                    "text_caption": voice_caption.text_caption,
+                    "is_edited": voice_caption.is_edited,
+                    "edit_history": voice_caption.edit_history,
+                },
+            })
+        elif action == "revert":
+            voice_caption.revert_to_original(request.user)
+            return JsonResponse({
+                "success": True,
+                "message": "Transcription reverted to original",
+                "caption": {
+                    "id": voice_caption.id,
+                    "text_caption": voice_caption.text_caption,
+                    "is_edited": voice_caption.is_edited,
+                    "edit_history": voice_caption.edit_history,
+                },
+            })
+        else:
+            return JsonResponse({"error": 'Invalid action. Use "edit" or "revert"'}, status=400)
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.error(f"Error editing caption transcription: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@login_required
+@require_POST
+def update_voice_caption_modality(request, patient_id, caption_id):
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    voice_caption = get_object_or_404(VoiceCaption, id=caption_id, patient=patient)
+
+    if not user_can_edit_caption(request.user, voice_caption):
+        return JsonResponse(
+            {
+                "error": "You do not have permission to edit this caption.",
+                "code": "permission_denied",
+            },
+            status=403,
+        )
+
+    try:
+        data = _json.loads(request.body) if request.body else request.POST
+        new_modality = (data.get("modality") or "").strip()
+        if not new_modality:
+            return JsonResponse({"error": "Modality cannot be empty"}, status=400)
+
+        valid_slugs = set(Modality.objects.filter(domain="urology", is_active=True).values_list("slug", flat=True))
+        if new_modality not in valid_slugs:
+            return JsonResponse({"error": "Invalid modality"}, status=400)
+
+        voice_caption.modality = new_modality
+        voice_caption.save(update_fields=["modality"])
+
+        return JsonResponse({
+            "success": True,
+            "message": "Modality updated successfully",
+            "caption": {
+                "id": voice_caption.id,
+                "modality": voice_caption.modality,
+                "modality_display": voice_caption.get_modality_display(),
+            },
+        })
+    except Exception as e:
+        logger.error(f"Error updating caption modality: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def bulk_upload_patients(request):
+    """Bulk upload scans for multiple Urology patients."""
+    user_profile = getattr(request.user, "profile", None)
+    if not user_profile or not user_profile.can_upload_scans():
+        message = "You do not have permission to upload scans."
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": message}, status=403)
+        messages.error(request, message)
+        return redirect("urology:patient_list")
+
+    project = _current_export_project(request)
+    if not project:
+        project = Project.objects.filter(domain="urology", is_active=True).first()
+
+    if not project or not user_is_project_admin(request.user, project):
+        message = "Bulk upload is restricted to project administrators."
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": message}, status=403)
+        messages.error(request, message)
+        return redirect("urology:patient_list")
+
+    allowed_modalities = list(
+        project.modalities.filter(is_active=True).exclude(slug="rawzip").order_by("name")
+    )
+    folders = filter_folders_for_user(
+        request.user,
+        Folder.objects.filter(project=project).order_by("name"),
+        "urology",
+    )
+
+    if request.method == "GET":
+        return render(
+            request,
+            "common/upload/bulk_upload.html",
+            {
+                "current_project": project,
+                "folders": folders,
+                "allowed_modalities": allowed_modalities,
+                "ns": "urology",
+                "accept_attribute": ".nii,.nii.gz,.svs,.ndpi,.tif,.tiff,.mrxs,.dz,.dzi",
+            },
+        )
+
+    uploaded_files = request.FILES.getlist("files")
+    if not uploaded_files:
+        return _bulk_urology_response(request, [], "Select at least one file to upload.")
+
+    folder = None
+    folder_id = request.POST.get("folder")
+    if folder_id:
+        folder = next((f for f in folders if str(f.id) == str(folder_id)), None)
+    if folder is None:
+        return _bulk_urology_response(
+            request, [], "Choose a folder of this project to upload into."
+        )
+
+    forced_modality = None
+    forced_slug = (request.POST.get("modality") or "").strip()
+    if forced_slug:
+        forced_modality = next((m for m in allowed_modalities if m.slug == forced_slug), None)
+
+    results = []
+    for uploaded_file in uploaded_files:
+        results.append(
+            _bulk_upload_one_urology(
+                request, project, folder, forced_modality, allowed_modalities, uploaded_file
+            )
+        )
+    return _bulk_urology_response(request, results)
+
+
+def _bulk_upload_one_urology(request, project, folder, forced_modality, allowed_modalities, uploaded_file):
+    filename = getattr(uploaded_file, "name", "") or "file"
+    modality = forced_modality
+    if modality is None:
+        fn_lower = filename.lower()
+        if any(fn_lower.endswith(ext) for ext in (".svs", ".ndpi", ".tif", ".tiff", ".mrxs", ".dz", ".dzi")):
+            modality = next((m for m in allowed_modalities if "wsi" in m.slug), None)
+        elif any(fn_lower.endswith(ext) for ext in (".nii", ".nii.gz")):
+            modality = next((m for m in allowed_modalities if "mri" in m.slug), None)
+        if modality is None:
+            modality = allowed_modalities[0] if allowed_modalities else None
+
+    if modality is None:
+        return {"file": filename, "ok": False, "error": "Could not infer modality for file"}
+
+    try:
+        with transaction.atomic():
+            base_name = os.path.splitext(filename)[0]
+            if base_name.endswith(".nii"):
+                base_name = os.path.splitext(base_name)[0]
+            clean_name = base_name.replace("_", " ").replace("-", " ").strip().title()
+            patient = Patient(
+                name=clean_name or "Patient",
+                folder=folder,
+                uploaded_by=request.user,
+            )
+            patient.project = project
+            patient.save()
+            patient.modalities.add(modality)
+            file_reg, job = save_urology_modality_file(patient, modality.slug, uploaded_file)
+    except Exception as exc:
+        logger.warning(f"Bulk upload failed for {filename}: {exc}", exc_info=True)
+        return {"file": filename, "ok": False, "error": str(exc)}
+
+    return {
+        "file": filename,
+        "ok": True,
+        "patient_id": patient.patient_id,
+        "patient_name": patient.name,
+        "modality": modality.slug,
+        "job_id": job.id if job else None,
+    }
+
+
+def _bulk_urology_response(request, results, error=None):
+    is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    created = [item for item in results if item.get("ok")]
+    failed = [item for item in results if not item.get("ok")]
+
+    if is_xhr:
+        if error:
+            return JsonResponse({"ok": False, "error": error, "results": results}, status=400)
+        return JsonResponse(
+            {
+                "ok": not failed,
+                "created": len(created),
+                "failed": len(failed),
+                "results": results,
+            },
+            status=200 if created or not results else 400,
+        )
+
+    if error:
+        messages.error(request, error)
+        return redirect("urology:bulk_upload_patients")
+    if created:
+        messages.success(request, f"Created {len(created)} patient(s).")
+    for item in failed:
+        messages.error(request, f"{item['file']}: {item['error']}")
+    if created and not failed:
+        return redirect("urology:patient_list")
+    return redirect("urology:bulk_upload_patients")
+
+
+@login_required
+@require_POST
+def add_raw_file(request, patient_id):
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    project = getattr(patient, "project", None) or "urology"
+    if not (
+        user_is_project_admin(request.user, project)
+        or (patient.folder and user_can_write_annotations(request.user, patient.folder, request))
+        or user_can_write_patient_annotations(request.user, patient)
+    ):
+        return JsonResponse({"ok": False, "error": "Permission denied"}, status=403)
+
+    modality_slug = request.POST.get("modality") or request.POST.get("modality_slug")
+    if not modality_slug:
+        return JsonResponse({"ok": False, "error": "Modality is required"}, status=400)
+
+    uploaded_file = request.FILES.get("file")
+    if not uploaded_file:
+        return JsonResponse({"ok": False, "error": "No file uploaded"}, status=400)
+
+    try:
+        file_reg, job = save_urology_modality_file(patient, modality_slug, uploaded_file)
+        modality = Modality.objects.filter(slug=modality_slug).first()
+        if modality:
+            patient.modalities.add(modality)
+        return JsonResponse({
+            "ok": True,
+            "file": {
+                "id": file_reg.id,
+                "file_type": file_reg.file_type,
+                "file_path": file_reg.file_path,
+                "file_size": file_reg.file_size,
+            },
+        })
+    except Exception as e:
+        logger.error(f"Error adding raw file: {e}", exc_info=True)
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+@login_required
+@require_POST
+def delete_raw_file(request, patient_id, file_id):
+    patient = get_object_or_404(Patient, patient_id=patient_id)
+    project = getattr(patient, "project", None) or "urology"
+    if not (
+        user_is_project_admin(request.user, project)
+        or (patient.folder and user_can_write_annotations(request.user, patient.folder, request))
+        or user_can_write_patient_annotations(request.user, patient)
+    ):
+        return JsonResponse({"ok": False, "error": "Permission denied"}, status=403)
+
+    file_obj = get_object_or_404(patient.files, id=file_id)
+    try:
+        if file_obj.file_path:
+            try:
+                get_object_storage().delete(file_obj.file_path)
+            except Exception as e:
+                logger.warning(f"Failed to delete object {file_obj.file_path}: {e}")
+        file_obj.delete()
+        return JsonResponse({"ok": True})
+    except Exception as e:
+        logger.error(f"Error deleting raw file: {e}", exc_info=True)
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)

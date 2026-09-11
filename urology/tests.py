@@ -312,16 +312,156 @@ class UrologyDomainTests(TestCase):
     def test_urology_export_views(self):
         resp = self.client.get("/urology/export/")
         self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Urology Export Datasets")
 
-        # Set session current project
+        # Verify fallback to active urology project when session is unset or cross-domain
         session = self.client.session
-        session["current_project_id"] = self.project.id
+        if "current_project_id" in session:
+            del session["current_project_id"]
         session.save()
 
         new_resp = self.client.get("/urology/export/new/")
         self.assertEqual(new_resp.status_code, 200)
+        self.assertContains(new_resp, "New Export - Urology")
+        self.assertContains(new_resp, self.project.name)
+
+        # Test export preview endpoint
+        preview_resp = self.client.post(
+            "/urology/export/preview/",
+            data=f'{{"folder_ids": [{self.folder.id}], "artifacts": ["urology-mri.raw", "urology-wsi.raw"]}}',
+            content_type="application/json",
+        )
+        self.assertEqual(preview_resp.status_code, 200)
+        preview_data = preview_resp.json()
+        self.assertTrue(preview_data["success"])
+        self.assertEqual(preview_data["folder_count"], 1)
+
+        # Test creating an export
+        post_data = {
+            "folder_ids": [str(self.folder.id)],
+            "artifacts": ["urology-mri.raw", "urology-wsi.raw"],
+        }
+        create_resp = self.client.post("/urology/export/new/", data=post_data, follow=True)
+        self.assertEqual(create_resp.status_code, 200)
+        from urology.models import Export
+        export = Export.objects.filter(user=self.user).first()
+        self.assertIsNotNone(export)
+        self.assertIn("urology-wsi.raw", export.query_params.get("artifacts", []))
+
+        # Test export status
+        status_resp = self.client.get(f"/urology/export/{export.id}/")
+        self.assertEqual(status_resp.status_code, 200)
+        self.assertEqual(status_resp.json()["id"], export.id)
+
+        # Test sharing update
+        export.status = "completed"
+        export.file_path = "urology/exports/test_export.zip"
+        export.file_size = 2048
+        export.save()
+        share_resp = self.client.post(
+            f"/urology/export/{export.id}/share/",
+            data='{"share_mode": "public", "expires_in_days": 7}',
+            content_type="application/json",
+        )
+        self.assertEqual(share_resp.status_code, 200)
+        self.assertTrue(share_resp.json()["success"])
+        export.refresh_from_db()
+        self.assertEqual(export.share_mode, "public")
+        self.assertIsNotNone(export.share_token)
+
+        # Test shared landing page
+        with patch("urology.views.artifact_exists", return_value=True):
+            landing_resp = self.client.get(f"/urology/export/shared/{export.share_token}/")
+            self.assertEqual(landing_resp.status_code, 200)
+            self.assertContains(landing_resp, "Shared Urology Dataset")
+
+        # Test export delete
+        del_resp = self.client.post(f"/urology/export/{export.id}/delete/")
+        self.assertEqual(del_resp.status_code, 200)
+        self.assertFalse(Export.objects.filter(id=export.id).exists())
+
+    def test_urology_caption_endpoints(self):
+        # 1. Create text caption
+        import json
+        caption_resp = self.client.post(
+            f"/urology/patient/{self.patient.patient_id}/text-caption/",
+            data=json.dumps({"text": "Prostate tumor observed in peripheral zone.", "modality": "urology-mri"}),
+            content_type="application/json",
+        )
+        self.assertEqual(caption_resp.status_code, 200)
+        c_data = caption_resp.json()
+        self.assertTrue(c_data["success"])
+        caption_id = c_data["caption"]["id"]
+        self.assertEqual(c_data["caption"]["text_caption"], "Prostate tumor observed in peripheral zone.")
+
+        # 2. Update modality
+        update_mod_resp = self.client.post(
+            f"/urology/patient/{self.patient.patient_id}/voice-caption/{caption_id}/update-modality/",
+            data=json.dumps({"modality": "urology-wsi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(update_mod_resp.status_code, 200)
+        self.assertTrue(update_mod_resp.json()["success"])
+
+        # 3. Edit transcription
+        edit_resp = self.client.post(
+            f"/urology/patient/{self.patient.patient_id}/voice-caption/{caption_id}/edit/",
+            data=json.dumps({"action": "edit", "text": "Confirmed Gleason 4+3 lesion."}),
+            content_type="application/json",
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        self.assertEqual(edit_resp.json()["caption"]["text_caption"], "Confirmed Gleason 4+3 lesion.")
+
+        # 4. Delete caption
+        del_resp = self.client.delete(f"/urology/patient/{self.patient.patient_id}/voice-caption/{caption_id}/delete/")
+        self.assertEqual(del_resp.status_code, 200)
+        self.assertTrue(del_resp.json()["success"])
+
+    def test_urology_bulk_upload(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        # GET bulk upload
+        get_resp = self.client.get("/urology/patients/bulk-upload/")
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertContains(get_resp, "Bulk upload")
+
+        # POST bulk upload
+        mri_file = SimpleUploadedFile("patient_case_mri.nii.gz", b"NIFTI_CONTENT", content_type="application/gzip")
+        wsi_file = SimpleUploadedFile("patient_case_wsi.tiff", b"TIFF_CONTENT", content_type="image/tiff")
+
+        post_resp = self.client.post(
+            "/urology/patients/bulk-upload/",
+            data={
+                "folder": self.folder.id,
+                "files": [mri_file, wsi_file],
+            },
+            follow=True,
+        )
+        self.assertEqual(post_resp.status_code, 200)
+        self.assertTrue(Patient.objects.filter(name__icontains="Patient Case Mri").exists())
+        self.assertTrue(Patient.objects.filter(name__icontains="Patient Case Wsi").exists())
+
+    def test_urology_raw_files_management(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        # Add raw file
+        scan_file = SimpleUploadedFile("extra_mri.nii.gz", b"SCAN_DATA", content_type="application/gzip")
+        add_resp = self.client.post(
+            f"/urology/patient/{self.patient.patient_id}/files/raw/add/",
+            data={"modality": "urology-mri", "file": scan_file},
+        )
+        self.assertEqual(add_resp.status_code, 200)
+        add_data = add_resp.json()
+        self.assertTrue(add_data["ok"])
+        file_id = add_data["file"]["id"]
+
+        # Delete raw file
+        del_resp = self.client.post(f"/urology/patient/{self.patient.patient_id}/files/raw/{file_id}/delete/")
+        self.assertEqual(del_resp.status_code, 200)
+        self.assertTrue(del_resp.json()["ok"])
 
     def test_urology_profile_view(self):
         resp = self.client.get("/urology/profile/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "urology_admin")
+
